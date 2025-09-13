@@ -31,8 +31,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           PRODUCT_HANDLE: w9536r-seamless-delight-high-neck-bra-white-heather
           VARIANT_ID: 43774160568500
-        run: |
-           run: python3.10 alo_restocker.py
+        run: python3.10 alo_restocker.py
 
       - name: Commit & push state if changed
         run: |
