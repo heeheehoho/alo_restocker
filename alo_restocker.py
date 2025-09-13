@@ -69,56 +69,72 @@ def get_json_with_retries():
                 last_err = e
                 time.sleep(1 + attempt)
     raise last_err if last_err else RuntimeError("Failed to fetch product JSON")
-
 def parse_html_fallback():
-    """HTML에서 보조 판별: 직접 요청 → 실패 시 r.jina.ai 프록시로 텍스트 판독"""
+    """HTML에서 재고 상태 판별 (보강 버전)"""
     targets = [
         f"https://www.aloyoga.com/ko-kr/products/{PRODUCT_HANDLE}?variant={VARIANT_ID}",
         f"https://www.aloyoga.com/products/{PRODUCT_HANDLE}?variant={VARIANT_ID}",
     ]
 
-    # 1) 직접 요청 (브라우저 헤더 + 백오프)
+    # 우선 HTML 직접 요청
     for url in targets:
-        for attempt in range(3):
-            try:
-                r = requests.get(url, headers=HEADERS, timeout=20)
-                if r.status_code in (403, 429):
-                    # 지수 백오프 + 지터
-                    time.sleep((2 ** attempt) + random.uniform(0.3, 0.9))
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=20)
+            if r.status_code in (403, 429):
+                continue
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "html.parser")
+            text = soup.get_text(" ").lower()
+
+            # 1) ld+json 확인
+            for tag in soup.find_all("script", type="application/ld+json"):
+                try:
+                    data = json.loads(tag.string or "{}")
+                except Exception:
                     continue
-                r.raise_for_status()
-                soup = BeautifulSoup(r.text, "html.parser")
-                text = soup.get_text(" ").lower()
+                arr = data if isinstance(data, list) else [data]
+                for d in arr:
+                    if isinstance(d, dict):
+                        offers = d.get("offers")
+                        if isinstance(offers, dict):
+                            avail = str(offers.get("availability", "")).lower()
+                            if "instock" in avail:
+                                return True
+                            if "outofstock" in avail:
+                                return False
 
-                # ld+json에서 availability 먼저 시도
-                for tag in soup.find_all("script", type="application/ld+json"):
-                    try:
-                        data = json.loads(tag.string or "{}")
-                    except Exception:
-                        continue
-                    arr = data if isinstance(data, list) else [data]
-                    for d in arr:
-                        if isinstance(d, dict):
-                            offers = d.get("offers")
-                            if isinstance(offers, dict):
-                                avail = str(offers.get("availability", "")).lower()
-                                if "instock" in avail:
-                                    return True
-                                if "outofstock" in avail:
-                                    return False
-
-                # 텍스트 신호
-                if any(sig in text for sig in ["out of stock", "sold out", "품절", "재고 없음"]):
-                    return False
-                if "add to bag" in text or "add to cart" in text or "장바구니 담기" in text:
+            # 2) 메타 태그
+            meta_avail = soup.find("meta", {"property": "og:availability"})
+            if meta_avail and meta_avail.get("content"):
+                val = meta_avail["content"].lower()
+                if "instock" in val:
                     return True
-                # 확정 못하면 다음 시도
-            except Exception:
-                time.sleep((2 ** attempt) + random.uniform(0.3, 0.9))
+                if "outofstock" in val:
+                    return False
 
-    # 2) r.jina.ai 프록시로 텍스트 가져오기 (마지막 우회)
+            # 3) 버튼 상태
+            add_btn = soup.select_one("button.add-to-cart, button.product-form__submit")
+            if add_btn:
+                btn_text = add_btn.get_text(" ", strip=True).lower()
+                if "sold out" in btn_text or "품절" in btn_text:
+                    return False
+                if not add_btn.has_attr("disabled"):
+                    return True
+
+            # 4) 텍스트 신호
+            signals_out = ["out of stock", "sold out", "품절", "재고 없음",
+                           "unavailable", "currently sold out", "coming soon", "장바구니 불가"]
+            if any(sig in text for sig in signals_out):
+                return False
+            if any(sig in text for sig in ["add to bag", "add to cart", "장바구니 담기"]):
+                return True
+
+        except Exception as e:
+            print("HTML parse error:", e)
+
+    # 최종 fallback: 프록시 텍스트
     for url in targets:
-        proxied = f"https://r.jina.ai/http://{url.replace('https://', '').replace('http://','')}"
+        proxied = f"https://r.jina.ai/http://{url.replace('https://','')}"
         try:
             r = requests.get(proxied, timeout=20)
             if r.status_code == 200:
@@ -127,11 +143,11 @@ def parse_html_fallback():
                     return False
                 if "add to bag" in txt or "add to cart" in txt or "장바구니 담기" in txt:
                     return True
-        except Exception:
-            pass
+        except Exception as e:
+            print("Proxy parse error:", e)
 
-    # 최종 판단 불가
     return None
+
 def check_stock():
     """우선 .js JSON → 실패 시 HTML 보조"""
     try:
@@ -168,7 +184,7 @@ def get_json_with_retries():
 
 def main():
     # 연결 테스트 메시지
-    send_telegram("🤖 Alo Restocker Bot 연결 OK!")
+    # send_telegram("🤖 Alo Restocker Bot 연결 OK!")
 
     try:
         available, size = check_stock()  # 내부에서 JSON→HTML→프록시 순차 시도

@@ -88,11 +88,14 @@ jobs:
 ```
 
 ### 4) 동작 방식
-- 5분마다 `alo_restocker.py`가 실행되어 대상 변형(variant)의 재고 여부를 확인
-- 이전 상태와 달라졌을 때만 텔레그램으로 알림 발송
-- 변경된 상태는 `.alo_stock_state.json`으로 저장되고 레포에 커밋되어 **중복 알림 방지**
+- GitHub Actions가 10분마다 실행됩니다.
+- 실행 시 동작 순서:
+  1. **연결 확인 메시지** (`🤖 Alo Restocker Bot 연결 OK!`) — 매 실행마다 발송됨.
+  2. **재고 상태 확인**
+     - 최초 실행 시: 현재 상태(품절/재고)를 텔레그램으로 발송합니다.
+     - 이후 실행 시: 상태가 **변경된 경우에만** 새로 알림을 발송합니다.
+- 따라서, 품절 상태가 계속 유지되면 추가 알림은 오지 않습니다.
 
----
 
 ## 로컬에서 테스트하고 싶다면 (선택)
 로컬에서는 `env.sh`를 사용해 환경변수를 로드한 뒤 스크립트를 실행하세요.
@@ -127,3 +130,4 @@ Seamless Delight High Neck Bra
 - Shopify 상품 JSON: `/products/<handle>.js` → variants 배열 내 `available: true/false`
 - HTML 내 `"Out Of Stock"` 텍스트, 버튼 disabled 속성 등으로 보조 판별
 - Actions 실행 주기는 최소 5분 단위 권장
+- 매 실행마다 오는 연결 메시지가 불필요하다면, `alo_restocker.py`의 `send_telegram("🤖 Alo Restocker Bot 연결 OK!")` 부분을 주석 처리하면 됩니다.
