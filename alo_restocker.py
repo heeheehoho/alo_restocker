@@ -1,7 +1,7 @@
 import os, json, re, time
 from datetime import datetime
 from pathlib import Path
-import requests
+import requests, json, time, random
 from bs4 import BeautifulSoup
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -71,47 +71,67 @@ def get_json_with_retries():
     raise last_err if last_err else RuntimeError("Failed to fetch product JSON")
 
 def parse_html_fallback():
-    """HTML에서 보조 판별 (ld+json의 availability 또는 텍스트 신호)"""
-    r = requests.get(BASE_PRODUCT_PAGE, headers=HEADERS, timeout=20)
-    if r.status_code == 403:
-        # locale 없이도 한 번 더
-        alt = f"https://www.aloyoga.com/products/{PRODUCT_HANDLE}?variant={VARIANT_ID}"
-        r = requests.get(alt, headers=HEADERS, timeout=20)
-    r.raise_for_status()
+    """HTML에서 보조 판별: 직접 요청 → 실패 시 r.jina.ai 프록시로 텍스트 판독"""
+    targets = [
+        f"https://www.aloyoga.com/ko-kr/products/{PRODUCT_HANDLE}?variant={VARIANT_ID}",
+        f"https://www.aloyoga.com/products/{PRODUCT_HANDLE}?variant={VARIANT_ID}",
+    ]
 
-    soup = BeautifulSoup(r.text, "html.parser")
-    text = soup.get_text(" ").lower()
+    # 1) 직접 요청 (브라우저 헤더 + 백오프)
+    for url in targets:
+        for attempt in range(3):
+            try:
+                r = requests.get(url, headers=HEADERS, timeout=20)
+                if r.status_code in (403, 429):
+                    # 지수 백오프 + 지터
+                    time.sleep((2 ** attempt) + random.uniform(0.3, 0.9))
+                    continue
+                r.raise_for_status()
+                soup = BeautifulSoup(r.text, "html.parser")
+                text = soup.get_text(" ").lower()
 
-    # 1) ld+json에서 "availability"
-    for tag in soup.find_all("script", type="application/ld+json"):
+                # ld+json에서 availability 먼저 시도
+                for tag in soup.find_all("script", type="application/ld+json"):
+                    try:
+                        data = json.loads(tag.string or "{}")
+                    except Exception:
+                        continue
+                    arr = data if isinstance(data, list) else [data]
+                    for d in arr:
+                        if isinstance(d, dict):
+                            offers = d.get("offers")
+                            if isinstance(offers, dict):
+                                avail = str(offers.get("availability", "")).lower()
+                                if "instock" in avail:
+                                    return True
+                                if "outofstock" in avail:
+                                    return False
+
+                # 텍스트 신호
+                if any(sig in text for sig in ["out of stock", "sold out", "품절", "재고 없음"]):
+                    return False
+                if "add to bag" in text or "add to cart" in text or "장바구니 담기" in text:
+                    return True
+                # 확정 못하면 다음 시도
+            except Exception:
+                time.sleep((2 ** attempt) + random.uniform(0.3, 0.9))
+
+    # 2) r.jina.ai 프록시로 텍스트 가져오기 (마지막 우회)
+    for url in targets:
+        proxied = f"https://r.jina.ai/http://{url.replace('https://', '').replace('http://','')}"
         try:
-            data = json.loads(tag.string or "{}")
+            r = requests.get(proxied, timeout=20)
+            if r.status_code == 200:
+                txt = r.text.lower()
+                if any(sig in txt for sig in ["out of stock", "sold out", "품절", "재고 없음"]):
+                    return False
+                if "add to bag" in txt or "add to cart" in txt or "장바구니 담기" in txt:
+                    return True
         except Exception:
-            continue
-        # 단일/리스트 모두 대응
-        candidates = data if isinstance(data, list) else [data]
-        for d in candidates:
-            if isinstance(d, dict) and d.get("@type") in ("Product", "Offer"):
-                avail = (d.get("offers") or {}).get("availability") if "offers" in d else d.get("availability")
-                if isinstance(avail, str):
-                    if "instock" in avail.lower():
-                        return True
-                    if "outofstock" in avail.lower():
-                        return False
+            pass
 
-    # 2) 텍스트 신호
-    out_signals = ["out of stock", "sold out", "품절", "재고 없음"]
-    if any(sig in text for sig in out_signals):
-        return False
-    # 장바구니 버튼이 보이면 True로 추정 (완벽하진 않지만 보조)
-    for btn in soup.find_all(["button", "a"]):
-        t = (btn.get_text(strip=True) or "").lower()
-        if t in ("add to bag", "add to cart", "장바구니 담기"):
-            if btn.has_attr("disabled") or "disabled" in (btn.get("class") or []):
-                return False
-            return True
-    return None  # 판단 불가
-
+    # 최종 판단 불가
+    return None
 def check_stock():
     """우선 .js JSON → 실패 시 HTML 보조"""
     try:
@@ -127,11 +147,41 @@ def check_stock():
         raise RuntimeError("Unable to determine stock state via HTML fallback")
     return html_guess, "L"
 
+# JSON 엔드포인트 재시도에 백오프 추가
+def get_json_with_retries():
+    endpoints = [
+        f"https://www.aloyoga.com/ko-kr/products/{PRODUCT_HANDLE}.js",
+        f"https://www.aloyoga.com/products/{PRODUCT_HANDLE}.js",
+    ]
+    for url in endpoints:
+        for attempt in range(3):
+            try:
+                r = requests.get(url, headers=HEADERS, timeout=20)
+                if r.status_code in (403, 429):
+                    time.sleep((2 ** attempt) + random.uniform(0.2, 0.8))
+                    continue
+                r.raise_for_status()
+                return r.json()
+            except Exception:
+                time.sleep((2 ** attempt) + random.uniform(0.2, 0.8))
+    raise RuntimeError("Failed to fetch product JSON")
+
 def main():
-    # 연결 테스트 메시지(1회)
+    # 연결 테스트 메시지
     send_telegram("🤖 Alo Restocker Bot 연결 OK!")
 
-    available, size = check_stock()
+    try:
+        available, size = check_stock()  # 내부에서 JSON→HTML→프록시 순차 시도
+    except Exception as e:
+        # 완전 실패 시에도 워크플로우 실패로 두지 말고 경고만 남김
+        send_telegram(f"⚠️ 재고 확인 실패(임시): {str(e)[:120]}")
+        print("Check failed:", e)
+        return  # 정상 종료로 처리
+
+    if available is None:
+        # 판단 불가 — 다음 주기에 재시도
+        send_telegram("⚠️ 재고 상태 판단 불가(임시). 다음 주기에 재시도합니다.")
+        return
 
     state = load_state()
     prev = state.get("available")
@@ -140,7 +190,7 @@ def main():
             f"Seamless Delight High Neck Bra\n"
             f"색상/사이즈: White Heather / {size}\n"
             f"상태: {'구매가능 ✅' if available else '품절 ❌'}\n"
-            f"링크: {BASE_PRODUCT_PAGE}\n"
+            f"링크: https://www.aloyoga.com/ko-kr/products/{PRODUCT_HANDLE}?variant={VARIANT_ID}\n"
             f"업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         )
         send_telegram(msg)
