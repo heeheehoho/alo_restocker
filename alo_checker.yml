@@ -1,0 +1,45 @@
+name: Alo Restock Checker
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # 5분마다 실행
+  workflow_dispatch:        # 필요 시 수동 실행
+
+permissions:
+  contents: write           # 상태 파일(.alo_stock_state.json) 커밋/푸시를 위해 필요
+
+jobs:
+  check-stock:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4
+
+      - name: Run script
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PRODUCT_HANDLE: w9536r-seamless-delight-high-neck-bra-white-heather
+          VARIANT_ID: 43774160568500
+        run: |
+          python alo_restocker.py
+
+      - name: Commit & push state if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [[ -n "$(git status --porcelain .alo_stock_state.json)" ]]; then
+            git add .alo_stock_state.json
+            git commit -m "chore: update state [skip ci]" || true
+            git push
+          fi
