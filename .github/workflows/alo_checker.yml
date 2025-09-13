@@ -2,7 +2,7 @@ name: Alo Restock Checker
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # 5분마다 실행
+    - cron: "*/20 * * * *"   # 5분마다 실행
   workflow_dispatch:        # 필요 시 수동 실행
 
 permissions:
