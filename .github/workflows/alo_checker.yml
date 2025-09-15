@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   check-stock:
-    runs-on: self-hosted
+    runs-on: [self-hosted, macOS, X64]
 
     steps:
       - name: Checkout repository
