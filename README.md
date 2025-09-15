@@ -71,7 +71,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           PRODUCT_HANDLE: w9536r-seamless-delight-high-neck-bra-white-heather
-          VARIANT_ID: 43774160568500
+          VARIANT_ID: 12134556678
         run: |
           python alo_restocker.py
 
@@ -88,7 +88,7 @@ jobs:
 ```
 
 ### 4) 동작 방식
-- GitHub Actions가 10분마다 실행됩니다.
+- GitHub Actions가 20분마다 실행됩니다.
 - 실행 시 동작 순서:
   1. **연결 확인 메시지** (`🤖 Alo Restocker Bot 연결 OK!`) — 매 실행마다 발송됨.
   2. **재고 상태 확인**
